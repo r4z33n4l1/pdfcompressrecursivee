@@ -4,7 +4,7 @@ from PIL import Image
 from pdf2image import convert_from_path
 from PyPDF2 import PdfMerger, PdfReader
 
-def compress_pdf(file_path, max_size_mb=4, quality=90, scale_factor=0.8):
+def compress_pdf(file_path, max_size_mb=4, quality=90, initial_scale_factor=0.5, tolerance=0.1):
     if not file_path.lower().endswith('.pdf') or not os.path.exists(file_path):
         print("Invalid file or file does not exist.")
         return
@@ -13,9 +13,15 @@ def compress_pdf(file_path, max_size_mb=4, quality=90, scale_factor=0.8):
     temp_dir = f"temp_{base_name}"
     os.makedirs(temp_dir, exist_ok=True)
 
+    def get_file_size_mb(file_path):
+        return os.path.getsize(file_path) / (1024 * 1024)
+
     try:
         # Convert PDF pages to images
         pages = convert_from_path(file_path)
+        scale_factor = initial_scale_factor
+        best_file_path = None
+        best_file_size = None
 
         while True:
             merger = PdfMerger()
@@ -40,20 +46,36 @@ def compress_pdf(file_path, max_size_mb=4, quality=90, scale_factor=0.8):
             merger.write(compressed_file_path)
             merger.close()
 
-            # Check if the file size is less than max_size_mb
-            if os.path.getsize(compressed_file_path) <= max_size_mb * 1024 * 1024:
-                break
-            else:
-                # If not, reduce the scale factor and try again
-                scale_factor *= 0.5
-                os.remove(compressed_file_path)
-                if scale_factor < 0.1:  # Set a minimum scale to prevent infinite loop
-                    print("Unable to compress further without severe quality loss.")
-                    break
+            current_file_size = get_file_size_mb(compressed_file_path)
+            print(f"Current file size: {current_file_size:.2f} MB with scale factor: {scale_factor}")
 
-        print(f"Compressed PDF saved as {compressed_file_path}")
-        print(f"File size: {os.path.getsize(compressed_file_path) / (1024 * 1024):.2f} MB")
-        print(f"Final scale factor: {scale_factor}")
+            if current_file_size <= max_size_mb:
+                # Save the best version so far
+                best_file_path = compressed_file_path
+                best_file_size = current_file_size
+
+                # Check if we can increase the scale factor to get closer to the max_size_mb
+                if current_file_size >= (1 - tolerance) * max_size_mb:
+                    print(f"Final compressed PDF saved as {best_file_path} with size {best_file_size:.2f} MB")
+                    break
+                else:
+                    scale_factor *= 1.1  # Try increasing the scale factor by 10%
+            else:
+                # If we're overshooting, reduce the scale factor and retry
+                scale_factor *= 0.9
+
+            # If the scale factor gets too small or too large
+            if scale_factor < 0.1:
+                print("Unable to compress further without severe quality loss.")
+                break
+            if scale_factor > 1.0 and best_file_path:
+                print(f"Final compressed PDF saved as {best_file_path} with size {best_file_size:.2f} MB")
+                break
+
+        # If no better version is found, use the best one
+        if best_file_path and best_file_size:
+            print(f"Final compressed PDF saved as {best_file_path}")
+            print(f"File size: {best_file_size:.2f} MB")
 
     except Exception as e:
         print(f"An error occurred: {e}")
